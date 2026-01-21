@@ -129,104 +129,52 @@ class TradingClient:
     
     def get_balance(self) -> float:
         """获取USDC余额"""
+        from decimal import Decimal
+        
+        USDC_DECIMALS = Decimal("1e6")  # USDC使用6位小数
+        
         try:
-            # 方法1: 尝试使用getBalanceAllowance（新方法）
-            if hasattr(self.client, 'getBalanceAllowance'):
+            # 兼容不同版本的命名：snake_case 和 camelCase
+            get_fn = getattr(self.client, "get_balance_allowance", None) or \
+                     getattr(self.client, "getBalanceAllowance", None)
+            upd_fn = getattr(self.client, "update_balance_allowance", None) or \
+                     getattr(self.client, "updateBalanceAllowance", None)
+            
+            if not get_fn:
+                # 如果找不到方法，列出可用的方法帮助调试
+                methods = [m for m in dir(self.client) if "balance" in m.lower() or "allow" in m.lower()]
+                print(f"\n⚠️  无法找到 get_balance_allowance/getBalanceAllowance 方法")
+                print(f"   可用的相关方法: {methods[:10] if methods else '无'}")
+                print("   建议: pip install -U py-clob-client==0.34.5")
+                return 0.0
+            
+            # 参数：USDC属于COLLATERAL类型，不需要token_id
+            params = {"asset_type": "COLLATERAL"}
+            
+            # 先刷新缓存（避免返回旧值/0）
+            if upd_fn:
                 try:
-                    # 尝试导入类型（如果可用）
-                    try:
-                        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-                        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-                        result = self.client.getBalanceAllowance(params)
-                        # 提取余额
-                        if hasattr(result, 'balance'):
-                            return float(result.balance)
-                        elif isinstance(result, dict):
-                            return float(result.get('balance', 0))
-                    except ImportError:
-                        # 如果类型不可用，使用字典方式
-                        result = self.client.getBalanceAllowance({
-                            'asset_type': 'COLLATERAL'
-                        })
-                        if isinstance(result, dict):
-                            return float(result.get('balance', 0))
-                        return float(result) if result else 0.0
-                except Exception as e1:
-                    print(f"⚠️  getBalanceAllowance失败: {e1}")
+                    upd_fn(params)
+                except Exception as e:
+                    print(f"⚠️  更新余额缓存失败（继续尝试获取）: {e}")
             
-            # 方法2: 尝试使用get_balance（可能的旧方法）
-            if hasattr(self.client, 'get_balance'):
-                try:
-                    balance = self.client.get_balance()
-                    return float(balance) if balance else 0.0
-                except Exception as e2:
-                    print(f"⚠️  get_balance失败: {e2}")
+            # 获取余额
+            resp = get_fn(params)
             
-            # 方法3: 尝试使用get_collateral（如果存在）
-            if hasattr(self.client, 'get_collateral'):
-                try:
-                    balance = self.client.get_collateral()
-                    return float(balance) if balance else 0.0
-                except Exception as e3:
-                    print(f"⚠️  get_collateral失败: {e3}")
-            
-            # 方法4: 尝试使用底层HTTP方法直接调用API
-            try:
-                # 检查是否有底层的get/post方法
-                if hasattr(self.client, 'get'):
-                    # 尝试调用 /balance 端点
-                    response = self.client.get('/balance')
-                    if isinstance(response, dict):
-                        return float(response.get('balance', response.get('collateral', response.get('usdc', 0))))
-                elif hasattr(self.client, '_get') or hasattr(self.client, 'request'):
-                    # 尝试其他可能的HTTP方法
-                    method = getattr(self.client, '_get', None) or getattr(self.client, 'request', None)
-                    if method:
-                        response = method('/balance', method='GET')
-                        if isinstance(response, dict):
-                            return float(response.get('balance', response.get('collateral', 0)))
-            except Exception as e4:
-                pass
-            
-            # 方法5: 尝试使用账户地址查询余额（通过get_user方法）
-            try:
-                if hasattr(self.client, 'get_user'):
-                    user_info = self.client.get_user()
-                    if isinstance(user_info, dict):
-                        balance = user_info.get('balance') or user_info.get('collateral') or user_info.get('usdc_balance')
-                        if balance:
-                            return float(balance)
-            except Exception as e5:
-                pass
-            
-            # 方法6: 尝试直接访问client的属性
-            try:
-                if hasattr(self.client, 'balance'):
-                    balance = self.client.balance
-                    if balance:
-                        return float(balance)
-                if hasattr(self.client, 'collateral'):
-                    collateral = self.client.collateral
-                    if collateral:
-                        return float(collateral)
-            except Exception as e6:
-                pass
-            
-            # 如果所有方法都失败，提供调试信息
-            print("\n⚠️  无法找到获取余额的方法")
-            print("   可用的方法（包含'balance'或'collateral'）:")
-            methods = [m for m in dir(self.client) if 'balance' in m.lower() or 'collateral' in m.lower()]
-            if methods:
-                for m in methods[:10]:
-                    print(f"     - {m}")
+            # 解析响应
+            if isinstance(resp, dict):
+                bal_raw = resp.get("balance")
+            elif hasattr(resp, "balance"):
+                bal_raw = resp.balance
             else:
-                print("     未找到相关方法")
-            print("\n   建议:")
-            print("   1. 运行: python scripts/check_clob_methods.py 查看所有可用方法")
-            print("   2. 检查py-clob-client版本: pip show py-clob-client")
-            print("   3. 更新库: pip install --upgrade py-clob-client")
+                raise RuntimeError(f"无法从响应解析balance: {resp}")
             
-            return 0.0
+            if bal_raw is None:
+                raise RuntimeError(f"响应中未找到balance字段: {resp}")
+            
+            # balance通常是最小单位（USDC 6位），需要除以1e6
+            balance_decimal = Decimal(str(bal_raw)) / USDC_DECIMALS
+            return float(balance_decimal)
             
         except Exception as e:
             print(f"❌ 获取余额失败: {e}")
