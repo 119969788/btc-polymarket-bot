@@ -22,15 +22,72 @@ class TradingClient:
             # 从私钥创建账户
             self.account = Account.from_key(self.config.POLYMARKET_PRIVATE_KEY)
             
-            # 创建ClobClient
-            self.client = ClobClient(
-                host=self.config.POLYMARKET_HOST,
-                key=self.config.POLYMARKET_API_KEY,
-                secret=self.config.POLYMARKET_API_SECRET,
-                passphrase=self.config.POLYMARKET_API_PASSPHRASE,
-                signature_type=self.config.POLYMARKET_SIGNATURE_TYPE,
-                chain_id=POLYGON,
-            )
+            # 创建ClobClient（只传入基本参数）
+            client_params = {
+                "host": self.config.POLYMARKET_HOST,
+                "key": self.config.POLYMARKET_PRIVATE_KEY,  # 使用私钥，不是API key
+                "chain_id": POLYGON,
+                "signature_type": self.config.POLYMARKET_SIGNATURE_TYPE,
+            }
+            
+            # 如果有funder地址，添加它（用于Proxy钱包）
+            if self.config.POLYMARKET_FUNDER:
+                client_params["funder"] = self.config.POLYMARKET_FUNDER
+            
+            self.client = ClobClient(**client_params)
+            
+            # 如果有API凭证，设置它们
+            if (self.config.POLYMARKET_API_KEY and 
+                self.config.POLYMARKET_API_SECRET and 
+                self.config.POLYMARKET_API_PASSPHRASE):
+                try:
+                    api_creds = {
+                        "apiKey": self.config.POLYMARKET_API_KEY,
+                        "secret": self.config.POLYMARKET_API_SECRET,
+                        "passphrase": self.config.POLYMARKET_API_PASSPHRASE
+                    }
+                    self.client.set_api_creds(api_creds)
+                except AttributeError:
+                    # 如果set_api_creds方法不存在，尝试其他方式
+                    print("⚠️  set_api_creds方法不可用，尝试其他方式设置API凭证")
+                    # 某些版本可能需要直接设置属性
+                    try:
+                        self.client.api_key = self.config.POLYMARKET_API_KEY
+                        self.client.api_secret = self.config.POLYMARKET_API_SECRET
+                        self.client.api_passphrase = self.config.POLYMARKET_API_PASSPHRASE
+                    except:
+                        print("⚠️  无法设置API凭证，某些功能可能受限")
+            else:
+                # 如果没有API凭证，尝试生成或派生
+                try:
+                    if hasattr(self.client, 'create_or_derive_api_creds'):
+                        creds = self.client.create_or_derive_api_creds()
+                    elif hasattr(self.client, 'generate_api_key'):
+                        creds = self.client.generate_api_key()
+                    else:
+                        raise AttributeError("无法找到生成API凭证的方法")
+                    
+                    # 设置API凭证
+                    if hasattr(self.client, 'set_api_creds'):
+                        self.client.set_api_creds(creds)
+                    else:
+                        # 尝试直接设置属性
+                        self.client.api_key = creds.get('apiKey', creds.get('api_key', ''))
+                        self.client.api_secret = creds.get('secret', '')
+                        self.client.api_passphrase = creds.get('passphrase', '')
+                    
+                    print("⚠️  已自动生成API凭证，请保存到.env文件：")
+                    api_key = creds.get('apiKey', creds.get('api_key', ''))
+                    secret = creds.get('secret', '')
+                    passphrase = creds.get('passphrase', '')
+                    print(f"   POLYMARKET_API_KEY={api_key}")
+                    print(f"   POLYMARKET_API_SECRET={secret}")
+                    print(f"   POLYMARKET_API_PASSPHRASE={passphrase}")
+                except Exception as e:
+                    print(f"⚠️  无法自动生成API凭证: {e}")
+                    print("   请运行 python -m src.generate_api_key 生成API凭证")
+                    print("   或者手动在.env文件中配置API凭证")
+            
             print("✅ 交易客户端初始化成功")
         except Exception as e:
             raise Exception(f"初始化交易客户端失败: {e}")

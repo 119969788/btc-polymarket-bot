@@ -30,15 +30,21 @@ class Config:
     @classmethod
     def validate(cls):
         """验证必需的配置"""
-        required = [
-            "POLYMARKET_PRIVATE_KEY",
-            "POLYMARKET_API_KEY",
-            "POLYMARKET_API_SECRET",
-            "POLYMARKET_API_PASSPHRASE"
+        # 私钥是必需的
+        if not cls.POLYMARKET_PRIVATE_KEY:
+            raise ValueError("缺少必需的配置: POLYMARKET_PRIVATE_KEY")
+        
+        # API凭证是可选的（可以自动生成），但如果提供了部分，必须提供全部
+        api_creds = [
+            cls.POLYMARKET_API_KEY,
+            cls.POLYMARKET_API_SECRET,
+            cls.POLYMARKET_API_PASSPHRASE
         ]
-        missing = [key for key in required if not getattr(cls, key)]
-        if missing:
-            raise ValueError(f"缺少必需的配置: {', '.join(missing)}")
+        has_some = any(api_creds)
+        has_all = all(api_creds)
+        
+        if has_some and not has_all:
+            raise ValueError("如果提供了API凭证，必须提供全部：POLYMARKET_API_KEY, POLYMARKET_API_SECRET, POLYMARKET_API_PASSPHRASE")
         
         if cls.BUY_PRICE >= cls.SELL_PRICE:
             raise ValueError(f"买入价格 ({cls.BUY_PRICE}) 必须小于卖出价格 ({cls.SELL_PRICE})")
