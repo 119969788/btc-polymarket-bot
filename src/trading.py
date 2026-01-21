@@ -130,10 +130,63 @@ class TradingClient:
     def get_balance(self) -> float:
         """获取USDC余额"""
         try:
-            balance = self.client.get_collateral()
-            return float(balance) if balance else 0.0
+            # 方法1: 尝试使用getBalanceAllowance（新方法）
+            if hasattr(self.client, 'getBalanceAllowance'):
+                try:
+                    # 尝试导入类型（如果可用）
+                    try:
+                        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                        params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                        result = self.client.getBalanceAllowance(params)
+                        # 提取余额
+                        if hasattr(result, 'balance'):
+                            return float(result.balance)
+                        elif isinstance(result, dict):
+                            return float(result.get('balance', 0))
+                    except ImportError:
+                        # 如果类型不可用，使用字典方式
+                        result = self.client.getBalanceAllowance({
+                            'asset_type': 'COLLATERAL'
+                        })
+                        if isinstance(result, dict):
+                            return float(result.get('balance', 0))
+                        return float(result) if result else 0.0
+                except Exception as e1:
+                    print(f"⚠️  getBalanceAllowance失败: {e1}")
+            
+            # 方法2: 尝试使用get_balance（可能的旧方法）
+            if hasattr(self.client, 'get_balance'):
+                try:
+                    balance = self.client.get_balance()
+                    return float(balance) if balance else 0.0
+                except Exception as e2:
+                    print(f"⚠️  get_balance失败: {e2}")
+            
+            # 方法3: 尝试使用get_collateral（如果存在）
+            if hasattr(self.client, 'get_collateral'):
+                try:
+                    balance = self.client.get_collateral()
+                    return float(balance) if balance else 0.0
+                except Exception as e3:
+                    print(f"⚠️  get_collateral失败: {e3}")
+            
+            # 方法4: 尝试直接调用API端点
+            try:
+                # 使用底层的get方法
+                if hasattr(self.client, 'get'):
+                    response = self.client.get('/balance')
+                    if isinstance(response, dict):
+                        return float(response.get('balance', response.get('collateral', 0)))
+            except Exception as e4:
+                pass
+            
+            # 如果所有方法都失败
+            raise AttributeError("无法找到获取余额的方法。请检查py-clob-client版本")
+            
         except Exception as e:
             print(f"❌ 获取余额失败: {e}")
+            import traceback
+            traceback.print_exc()
             return 0.0
     
     def get_orderbook(self, token_id: str) -> Optional[Dict]:
