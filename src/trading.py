@@ -59,34 +59,62 @@ class TradingClient:
                         print("⚠️  无法设置API凭证，某些功能可能受限")
             else:
                 # 如果没有API凭证，尝试生成或派生
+                print("⚠️  未找到API凭证，尝试自动生成...")
+                creds = None
+                
+                # 方法1: 尝试本地派生（不需要API调用）
                 try:
-                    if hasattr(self.client, 'create_or_derive_api_creds'):
-                        creds = self.client.create_or_derive_api_creds()
-                    elif hasattr(self.client, 'generate_api_key'):
-                        creds = self.client.generate_api_key()
-                    else:
-                        raise AttributeError("无法找到生成API凭证的方法")
-                    
+                    if hasattr(self.client, 'derive_api_key'):
+                        import secrets
+                        nonce = secrets.token_hex(16)
+                        creds = self.client.derive_api_key(nonce)
+                        print("✅ 使用本地派生方法生成API凭证")
+                except Exception as e1:
+                    pass
+                
+                # 方法2: 尝试create_or_derive_api_creds
+                if not creds:
+                    try:
+                        if hasattr(self.client, 'create_or_derive_api_creds'):
+                            creds = self.client.create_or_derive_api_creds()
+                            print("✅ 使用create_or_derive_api_creds生成API凭证")
+                    except Exception as e2:
+                        pass
+                
+                # 方法3: 尝试generate_api_key（旧方法）
+                if not creds:
+                    try:
+                        if hasattr(self.client, 'generate_api_key'):
+                            creds = self.client.generate_api_key()
+                            print("✅ 使用generate_api_key生成API凭证")
+                    except Exception as e3:
+                        pass
+                
+                if creds:
                     # 设置API凭证
-                    if hasattr(self.client, 'set_api_creds'):
-                        self.client.set_api_creds(creds)
-                    else:
-                        # 尝试直接设置属性
-                        self.client.api_key = creds.get('apiKey', creds.get('api_key', ''))
-                        self.client.api_secret = creds.get('secret', '')
-                        self.client.api_passphrase = creds.get('passphrase', '')
-                    
-                    print("⚠️  已自动生成API凭证，请保存到.env文件：")
-                    api_key = creds.get('apiKey', creds.get('api_key', ''))
-                    secret = creds.get('secret', '')
-                    passphrase = creds.get('passphrase', '')
-                    print(f"   POLYMARKET_API_KEY={api_key}")
-                    print(f"   POLYMARKET_API_SECRET={secret}")
-                    print(f"   POLYMARKET_API_PASSPHRASE={passphrase}")
-                except Exception as e:
-                    print(f"⚠️  无法自动生成API凭证: {e}")
-                    print("   请运行 python -m src.generate_api_key 生成API凭证")
-                    print("   或者手动在.env文件中配置API凭证")
+                    try:
+                        if hasattr(self.client, 'set_api_creds'):
+                            self.client.set_api_creds(creds)
+                        else:
+                            # 尝试直接设置属性
+                            self.client.api_key = creds.get('apiKey', creds.get('api_key', ''))
+                            self.client.api_secret = creds.get('secret', '')
+                            self.client.api_passphrase = creds.get('passphrase', '')
+                        
+                        print("⚠️  已自动生成API凭证，请保存到.env文件：")
+                        api_key = creds.get('apiKey', creds.get('api_key', ''))
+                        secret = creds.get('secret', '')
+                        passphrase = creds.get('passphrase', '')
+                        print(f"   POLYMARKET_API_KEY={api_key}")
+                        print(f"   POLYMARKET_API_SECRET={secret}")
+                        print(f"   POLYMARKET_API_PASSPHRASE={passphrase}")
+                    except Exception as e:
+                        print(f"⚠️  设置API凭证失败: {e}")
+                else:
+                    print("⚠️  无法自动生成API凭证")
+                    print("   某些功能（如下单）可能需要API凭证")
+                    print("   请运行: python -m src.generate_api_key")
+                    print("   或参考: docs/API_KEY_GUIDE.md 手动生成")
             
             print("✅ 交易客户端初始化成功")
         except Exception as e:
