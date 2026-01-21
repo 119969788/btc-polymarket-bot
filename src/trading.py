@@ -170,18 +170,63 @@ class TradingClient:
                 except Exception as e3:
                     print(f"⚠️  get_collateral失败: {e3}")
             
-            # 方法4: 尝试直接调用API端点
+            # 方法4: 尝试使用底层HTTP方法直接调用API
             try:
-                # 使用底层的get方法
+                # 检查是否有底层的get/post方法
                 if hasattr(self.client, 'get'):
+                    # 尝试调用 /balance 端点
                     response = self.client.get('/balance')
                     if isinstance(response, dict):
-                        return float(response.get('balance', response.get('collateral', 0)))
+                        return float(response.get('balance', response.get('collateral', response.get('usdc', 0))))
+                elif hasattr(self.client, '_get') or hasattr(self.client, 'request'):
+                    # 尝试其他可能的HTTP方法
+                    method = getattr(self.client, '_get', None) or getattr(self.client, 'request', None)
+                    if method:
+                        response = method('/balance', method='GET')
+                        if isinstance(response, dict):
+                            return float(response.get('balance', response.get('collateral', 0)))
             except Exception as e4:
                 pass
             
-            # 如果所有方法都失败
-            raise AttributeError("无法找到获取余额的方法。请检查py-clob-client版本")
+            # 方法5: 尝试使用账户地址查询余额（通过get_user方法）
+            try:
+                if hasattr(self.client, 'get_user'):
+                    user_info = self.client.get_user()
+                    if isinstance(user_info, dict):
+                        balance = user_info.get('balance') or user_info.get('collateral') or user_info.get('usdc_balance')
+                        if balance:
+                            return float(balance)
+            except Exception as e5:
+                pass
+            
+            # 方法6: 尝试直接访问client的属性
+            try:
+                if hasattr(self.client, 'balance'):
+                    balance = self.client.balance
+                    if balance:
+                        return float(balance)
+                if hasattr(self.client, 'collateral'):
+                    collateral = self.client.collateral
+                    if collateral:
+                        return float(collateral)
+            except Exception as e6:
+                pass
+            
+            # 如果所有方法都失败，提供调试信息
+            print("\n⚠️  无法找到获取余额的方法")
+            print("   可用的方法（包含'balance'或'collateral'）:")
+            methods = [m for m in dir(self.client) if 'balance' in m.lower() or 'collateral' in m.lower()]
+            if methods:
+                for m in methods[:10]:
+                    print(f"     - {m}")
+            else:
+                print("     未找到相关方法")
+            print("\n   建议:")
+            print("   1. 运行: python scripts/check_clob_methods.py 查看所有可用方法")
+            print("   2. 检查py-clob-client版本: pip show py-clob-client")
+            print("   3. 更新库: pip install --upgrade py-clob-client")
+            
+            return 0.0
             
         except Exception as e:
             print(f"❌ 获取余额失败: {e}")
