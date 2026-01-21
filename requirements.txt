@@ -1,0 +1,4 @@
+py-clob-client>=0.5.0
+python-dotenv>=1.0.0
+web3>=6.0.0
+eth-account>=0.8.0
