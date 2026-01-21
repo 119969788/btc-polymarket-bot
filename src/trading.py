@@ -173,8 +173,22 @@ class TradingClient:
                 raise RuntimeError(f"响应中未找到balance字段: {resp}")
             
             # balance通常是最小单位（USDC 6位），需要除以1e6
-            balance_decimal = Decimal(str(bal_raw)) / USDC_DECIMALS
-            return float(balance_decimal)
+            # 确保bal_raw是字符串或数字，然后转换为Decimal
+            if isinstance(bal_raw, str):
+                # 如果已经是字符串，直接使用
+                bal_decimal = Decimal(bal_raw)
+            else:
+                # 如果是数字，转换为字符串再转Decimal
+                bal_decimal = Decimal(str(bal_raw))
+            
+            # 除以1e6转换为实际USDC金额
+            balance_decimal = bal_decimal / USDC_DECIMALS
+            result = float(balance_decimal)
+            
+            # 调试信息（仅在开发时使用，可以注释掉）
+            # print(f"DEBUG: bal_raw={bal_raw}, type={type(bal_raw)}, result={result}")
+            
+            return result
             
         except Exception as e:
             print(f"❌ 获取余额失败: {e}")
