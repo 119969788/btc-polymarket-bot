@@ -1,11 +1,18 @@
 """交易执行模块"""
 from py_clob_client.client import ClobClient
-from py_clob_client.utilities import create_signed_order
 from py_clob_client.constants import POLYGON
 from eth_account import Account
 from decimal import Decimal
 from typing import Optional, Dict
 import time
+
+# 尝试导入订单相关的类型（如果可用）
+try:
+    from py_clob_client.clob_types import OrderArgs
+    from py_clob_client.order_builder.constants import BUY, SELL
+    HAS_ORDER_TYPES = True
+except ImportError:
+    HAS_ORDER_TYPES = False
 
 class TradingClient:
     """交易客户端"""
@@ -192,29 +199,72 @@ class TradingClient:
             return "simulated_order_id"
         
         try:
-            # 创建签名订单
-            signed_order = create_signed_order(
-                client=self.client,
-                token_id=token_id,
-                price=str(price),
-                size=str(size),
-                side=side,
-                order_type=order_type,
-            )
+            # 使用ClobClient的新API创建订单
+            # 方法1: 尝试使用create_and_post_order（新方法）
+            if hasattr(self.client, 'create_and_post_order'):
+                if HAS_ORDER_TYPES:
+                    # 使用OrderArgs类型
+                    order_side = BUY if side.upper() == "BUY" else SELL
+                    order_args = OrderArgs(
+                        token_id=token_id,
+                        price=str(price),
+                        size=str(size),
+                        side=order_side,
+                        order_type=order_type
+                    )
+                    resp = self.client.create_and_post_order(order_args)
+                else:
+                    # 使用字典方式
+                    resp = self.client.create_and_post_order({
+                        "token_id": token_id,
+                        "price": str(price),
+                        "size": str(size),
+                        "side": side.upper(),
+                        "order_type": order_type
+                    })
+            # 方法2: 尝试使用create_order（旧方法，需要先构建订单）
+            elif hasattr(self.client, 'create_order'):
+                # 构建订单对象
+                order_data = {
+                    "token_id": token_id,
+                    "price": str(price),
+                    "size": str(size),
+                    "side": side.upper(),
+                    "order_type": order_type
+                }
+                resp = self.client.create_order(order_data)
+            # 方法3: 尝试使用post_order
+            elif hasattr(self.client, 'post_order'):
+                order_data = {
+                    "token_id": token_id,
+                    "price": str(price),
+                    "size": str(size),
+                    "side": side.upper(),
+                    "order_type": order_type
+                }
+                resp = self.client.post_order(order_data)
+            else:
+                raise AttributeError("无法找到创建订单的方法")
             
-            # 提交订单
-            resp = self.client.create_order(signed_order)
-            order_id = resp.get("id")
+            # 提取订单ID
+            if isinstance(resp, dict):
+                order_id = resp.get("id") or resp.get("order_id") or resp.get("orderId")
+            elif hasattr(resp, 'id'):
+                order_id = resp.id
+            else:
+                order_id = str(resp) if resp else None
             
             if order_id:
                 print(f"✅ 订单已提交: {order_id} ({side} {size} @ ${price:.4f})")
-                return order_id
+                return str(order_id)
             else:
                 print(f"❌ 订单提交失败: {resp}")
                 return None
                 
         except Exception as e:
             print(f"❌ 下单失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def get_order_status(self, order_id: str) -> Optional[Dict]:
