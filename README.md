@@ -21,10 +21,12 @@
 
 ## 🚀 安装
 
+> 📖 **服务器安装**: 如需在Linux服务器上安装，请查看 [INSTALL.md](INSTALL.md) 获取详细步骤。
+
 ### 1. 克隆仓库
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/119969788/btc-polymarket-bot.git
 cd btc-polymarket-bot
 ```
 
