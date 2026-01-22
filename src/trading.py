@@ -286,7 +286,22 @@ class TradingClient:
         token_id = str(token_id)
         px = float(price)
         sz = float(size)
-        fee_bps = 0  # ✅ 必须给，否则某些版本会 KeyError: fee_rate_bps
+        # ✅ 获取费率（默认30 bps = 0.3%）
+        fee_bps = 30
+        try:
+            if hasattr(self.client, 'get_fee_rate'):
+                fee_info = self.client.get_fee_rate()
+                if isinstance(fee_info, dict):
+                    fee_bps = fee_info.get('fee_rate_bps', fee_info.get('feeRateBps', 30))
+                elif isinstance(fee_info, (int, float)):
+                    fee_bps = int(fee_info)
+            elif hasattr(self.client, 'fee_rate_bps'):
+                fee_bps = int(self.client.fee_rate_bps)
+            elif hasattr(self.client, 'feeRateBps'):
+                fee_bps = int(self.client.feeRateBps)
+        except:
+            pass
+        fee_bps = max(1, int(fee_bps))  # 确保至少为1，不能为0
 
         create_market_fn = self._get_method("create_market_order", "createMarketOrder")
         create_limit_fn = self._get_method("create_order", "createOrder")
@@ -311,6 +326,7 @@ class TradingClient:
                     orderType=order_type,
                     fee_rate_bps=int(fee_bps),
                     feeRateBps=int(fee_bps),
+                    taker=self.account.address,  # 添加taker地址
                 )
 
                 signed = create_market_fn(m_args)
@@ -342,6 +358,7 @@ class TradingClient:
                     side=BUY if side_u == "BUY" else SELL,
                     fee_rate_bps=int(fee_bps),
                     feeRateBps=int(fee_bps),
+                    taker=self.account.address,  # 添加taker地址
                 )
                 signed = create_limit_fn(l_args)
                 try:
@@ -367,6 +384,7 @@ class TradingClient:
                     side=BUY if side_u == "BUY" else SELL,
                     fee_rate_bps=int(fee_bps),
                     feeRateBps=int(fee_bps),
+                    taker=self.account.address,  # 添加taker地址
                 )
                 resp = create_and_post_fn(payload)
                 oid = self._extract_order_id(resp)
