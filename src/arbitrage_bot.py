@@ -44,10 +44,26 @@ class ArbitrageBot:
             return False
 
         self.market_info = market
+        
+        # 检查市场是否live
+        is_live = market.get('is_live', False)
+        start_ts = market.get('start_ts', 0)
+        end_ts = market.get('end_ts', 0)
+        now_ts = int(time.time())
+        
         print(f"✅ 找到市场: {market.get('question')}")
         print(f"   market_id: {market.get('market_id')}")
         print(f"   slug: {market.get('slug')}")
-        print(f"   is_live: {market.get('is_live')}")
+        print(f"   is_live: {is_live}")
+        print(f"   当前时间: {now_ts} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now_ts))})")
+        if start_ts:
+            print(f"   开始时间: {start_ts} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_ts))})")
+        if end_ts:
+            print(f"   结束时间: {end_ts} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_ts))})")
+        
+        if not is_live:
+            print("⚠️  市场未开启，尝试查找下一个活跃市场...")
+            # 可以在这里添加重新查找逻辑，或者等待市场开启
 
         conditions = get_market_conditions(self.config.POLYMARKET_HOST, market["market_id"])
         if not conditions:
@@ -143,17 +159,22 @@ class ArbitrageBot:
         has_position = token_id in self.positions
         already_tried_buy = buy_guard_key in self._buy_once_guard
 
-        # ✅ 买入：Ask >= BUY_PRICE（追价）
+        # ✅ 买入：Ask <= BUY_PRICE（价格低时买入）
         if (not has_position) and (not already_tried_buy):
-            if best_ask >= float(self.config.BUY_PRICE):
-                print(f"\n🎯 [{side_name}] 触发买入：Ask=${best_ask:.4f} >= {self.config.BUY_PRICE:.4f}（盘口价成交）")
+            if best_ask <= float(self.config.BUY_PRICE):
+                print(f"\n🎯 [{side_name}] 触发买入：Ask=${best_ask:.4f} <= {self.config.BUY_PRICE:.4f}（盘口价成交）")
+                
+                # 标准化价格：真实ask + 小buffer，最大0.99
+                order_price = min(0.99, best_ask + 0.005)
+                order_price = round(order_price, 4)
+                order_size = round(float(self.config.ORDER_SIZE), 2)
 
                 order_id = self.trading_client.place_order(
                     token_id=token_id,
                     side="BUY",
-                    price=float(best_ask),
-                    size=float(self.config.ORDER_SIZE),
-                    order_type="FAK",
+                    price=order_price,
+                    size=order_size,
+                    order_type="FOK",  # 使用FOK确保全成或取消
                 )
 
                 self._buy_once_guard.add(buy_guard_key)
@@ -177,12 +198,18 @@ class ArbitrageBot:
         if has_position:
             pos = self.positions[token_id]
             if best_bid >= float(self.config.SELL_PRICE):
+                # 标准化价格：使用合理卖价
+                order_price = max(0.01, best_bid - 0.005)
+                order_price = round(order_price, 4)
+                order_size = round(float(pos["size"]), 2)
                 print(f"\n🎯 [{side_name}] 触发卖出：Bid=${best_bid:.4f} >= {self.config.SELL_PRICE:.4f}（盘口价成交）")
 
                 order_id = self.trading_client.place_order(
                     token_id=token_id,
                     side="SELL",
-                    price=float(best_bid),
+                    price=order_price,
+                    size=order_size,
+                    order_type="FOK",  # 使用FOK确保全成或取消
                     size=float(pos["size"]),
                     order_type="FAK",
                 )

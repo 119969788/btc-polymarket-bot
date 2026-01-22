@@ -223,7 +223,35 @@ class TradingClient:
             raise AttributeError("无法找到 get_order_book/get_orderbook/getOrderBook 方法")
         return fn(token_id)
 
+    def get_price(self, token_id: str, side: str = "BUY") -> Optional[Dict[str, Any]]:
+        """
+        使用get_price获取真实价格（推荐，比orderbook更准确）
+        """
+        try:
+            get_price_fn = self._get_method("get_price", "getPrice")
+            if get_price_fn:
+                result = get_price_fn(token_id, side=side)
+                if isinstance(result, dict):
+                    return result
+                elif hasattr(result, "price"):
+                    return {"price": float(result.price)}
+            return None
+        except Exception as e:
+            print(f"⚠️  get_price失败: {e}")
+            return None
+
     def get_best_price(self, token_id: str, side: str = "buy") -> Optional[float]:
+        """
+        获取最佳价格（优先使用get_price，回退到orderbook）
+        """
+        # 优先使用get_price
+        side_upper = side.upper()
+        if side_upper in ("BUY", "SELL"):
+            price_info = self.get_price(token_id, side=side_upper)
+            if price_info and "price" in price_info:
+                return float(price_info["price"])
+        
+        # 回退到orderbook
         try:
             ob = self.get_orderbook(token_id)
             asks, bids = self._extract_levels(ob)

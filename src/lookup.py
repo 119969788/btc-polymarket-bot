@@ -113,6 +113,100 @@ def _build_slug(ts: int) -> str:
 
 def find_btc_15min_market(host: str, forward_steps: int = 12, backward_steps: int = 4) -> Optional[Dict[str, Any]]:
     """
+    改进版：使用Gamma API搜索，不依赖硬编码slug
+    优先查找active=true, is_live=true, volume>0的市场
+    """
+    now = int(time.time())
+    
+    # 方法1: 使用Gamma API搜索
+    try:
+        # 搜索BTC 15分钟市场
+        search_url = f"{GAMMA_API}/markets"
+        params = {
+            "active": "true",
+            "limit": 50,
+            "sort": "volume",
+            "order": "desc",
+            "search": "15m btc"
+        }
+        r = requests.get(search_url, params=params, timeout=10, headers={
+            "User-Agent": "btc-15m-bot/1.0",
+            "Cache-Control": "no-cache",
+        })
+        if r.status_code == 200:
+            markets = r.json()
+            if isinstance(markets, list):
+                for m in markets:
+                    slug = str(m.get("slug", "")).lower()
+                    # 过滤：slug包含btc-updown-15m，active/live，volume>0
+                    if "btc-updown-15m" in slug or "bitcoin-up-or-down-15-minute" in slug:
+                        closed = _safe_bool(m.get("closed"), False)
+                        active = _safe_bool(m.get("active"), True)
+                        is_live = _safe_bool(m.get("is_live"), False)
+                        volume = float(m.get("volume", 0) or 0)
+                        end_time = m.get("endDate") or m.get("end_time") or m.get("endTime")
+                        
+                        # 检查结束时间
+                        end_ts = None
+                        if end_time:
+                            try:
+                                from datetime import datetime
+                                if isinstance(end_time, (int, float)):
+                                    end_ts = int(end_time)
+                                elif isinstance(end_time, str):
+                                    # 尝试解析ISO格式
+                                    dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                                    end_ts = int(dt.timestamp())
+                            except:
+                                pass
+                        
+                        # 过滤条件：未关闭，活跃，有交易量，未过期
+                        if not closed and active and volume > 0:
+                            if end_ts and end_ts <= now:
+                                continue  # 已过期
+                            
+                            mid = m.get("id") or m.get("market_id") or m.get("marketId")
+                            if mid:
+                                # 计算时间戳
+                                start_ts = m.get("startDate") or m.get("start_time") or m.get("startTime")
+                                if start_ts:
+                                    try:
+                                        if isinstance(start_ts, (int, float)):
+                                            start_ts_int = int(start_ts)
+                                        elif isinstance(start_ts, str):
+                                            from datetime import datetime
+                                            dt = datetime.fromisoformat(start_ts.replace('Z', '+00:00'))
+                                            start_ts_int = int(dt.timestamp())
+                                        else:
+                                            start_ts_int = now
+                                    except:
+                                        start_ts_int = now
+                                else:
+                                    start_ts_int = now
+                                
+                                if not end_ts:
+                                    end_ts = start_ts_int + INTERVAL
+                                
+                                is_live_check = (start_ts_int <= now < end_ts)
+                                
+                                result = {
+                                    "market_id": int(mid),
+                                    "question": m.get("question") or m.get("title") or slug,
+                                    "slug": slug,
+                                    "start_ts": start_ts_int,
+                                    "end_ts": end_ts,
+                                    "is_live": is_live_check or is_live,
+                                    "volume": volume
+                                }
+                                
+                                # 优先返回live的市场
+                                if is_live_check or is_live:
+                                    return result
+    except Exception as e:
+        print(f"⚠️  Gamma API搜索失败: {e}")
+    
+    # 方法2: 回退到原来的slug查找逻辑
+    """
     返回：
     {
       "market_id": int,
