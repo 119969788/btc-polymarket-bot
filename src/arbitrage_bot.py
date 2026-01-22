@@ -210,8 +210,6 @@ class ArbitrageBot:
                     price=order_price,
                     size=order_size,
                     order_type="FOK",  # 使用FOK确保全成或取消
-                    size=float(pos["size"]),
-                    order_type="FAK",
                 )
 
                 if order_id:
