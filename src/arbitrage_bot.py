@@ -85,10 +85,10 @@ class ArbitrageBot:
         has_position = token_id in self.positions
         
         if not has_position:
-            # 没有持仓，检查是否可以买入（价格 <= BUY_PRICE）
+            # 没有持仓，检查是否可以买入（Ask价格 <= BUY_PRICE）
+            # Ask是卖价，即我们要买入时需要支付的价格
             if best_ask <= self.config.BUY_PRICE:
-                print(f"\n🎯 [{side_name}] 买入机会！")
-                print(f"   当前价格: ${best_ask:.4f} <= 买入价 ${self.config.BUY_PRICE:.4f}")
+                print(f"\n🎯 [{side_name}] 触发买入：Ask=${best_ask:.4f} <= ${self.config.BUY_PRICE:.4f}（盘口价成交）")
                 
                 order_id = self.trading_client.place_order(
                     token_id=token_id,
@@ -114,6 +114,8 @@ class ArbitrageBot:
                         self.stats["total_buys"] += 1
                         self.stats["total_invested"] += self.config.BUY_PRICE * self.config.ORDER_SIZE
                         print(f"✅ [{side_name}] 买入成功！持仓: {self.config.ORDER_SIZE} shares @ ${self.config.BUY_PRICE:.4f}")
+                else:
+                    print(f"❌ [{side_name}] 买单提交失败（本场已标记尝试过，不再重复买）")
         else:
             # 有持仓，检查是否可以卖出（价格 >= SELL_PRICE）
             position = self.positions[token_id]

@@ -290,7 +290,7 @@ class TradingClient:
                 if HAS_ORDER_TYPES:
                     # 使用OrderArgs类型
                     order_side = BUY if side.upper() == "BUY" else SELL
-                    # 尝试不同的参数格式
+                    # 尝试不同的参数格式，包括taker属性
                     try:
                         order_args = OrderArgs(
                             token_id=token_id,
@@ -298,9 +298,10 @@ class TradingClient:
                             size=str(size),
                             side=order_side,
                             order_type=order_type,
-                            fee_rate_bps=fee_rate_bps  # 尝试整数
+                            fee_rate_bps=fee_rate_bps,
+                            taker=self.account.address  # 添加taker地址
                         )
-                    except TypeError:
+                    except TypeError as e1:
                         # 如果整数不行，尝试字符串
                         try:
                             order_args = OrderArgs(
@@ -309,17 +310,29 @@ class TradingClient:
                                 size=str(size),
                                 side=order_side,
                                 order_type=order_type,
-                                fee_rate_bps=str(fee_rate_bps)
+                                fee_rate_bps=str(fee_rate_bps),
+                                taker=self.account.address
                             )
-                        except TypeError:
-                            # 如果都不行，尝试不带这个参数（某些版本可能不需要）
-                            order_args = OrderArgs(
-                                token_id=token_id,
-                                price=str(price),
-                                size=str(size),
-                                side=order_side,
-                                order_type=order_type
-                            )
+                        except TypeError as e2:
+                            # 如果都不行，尝试不带fee_rate_bps但带taker
+                            try:
+                                order_args = OrderArgs(
+                                    token_id=token_id,
+                                    price=str(price),
+                                    size=str(size),
+                                    side=order_side,
+                                    order_type=order_type,
+                                    taker=self.account.address
+                                )
+                            except TypeError as e3:
+                                # 最后尝试最简参数
+                                order_args = OrderArgs(
+                                    token_id=token_id,
+                                    price=str(price),
+                                    size=str(size),
+                                    side=order_side,
+                                    order_type=order_type
+                                )
                     resp = self.client.create_and_post_order(order_args)
                 else:
                     # 使用字典方式，尝试不同的参数格式
