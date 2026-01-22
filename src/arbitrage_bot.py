@@ -142,11 +142,27 @@ class ArbitrageBot:
         slug = (self.market_info or {}).get("slug") or ""
         buy_guard_key = (slug, side_name)
 
-        best_ask = self.trading_client.get_best_price(token_id, side="buy")
-        best_bid = self.trading_client.get_best_price(token_id, side="sell")
+        # 优先使用get_price获取真实价格（比orderbook更准确）
+        up_price_info = self.trading_client.get_price(token_id, side="BUY")
+        down_price_info = self.trading_client.get_price(token_id, side="SELL")
+        
+        best_ask = None
+        best_bid = None
+        if up_price_info and "price" in up_price_info:
+            best_ask = float(up_price_info["price"])
+        if down_price_info and "price" in down_price_info:
+            best_bid = float(down_price_info["price"])
+        
+        # 如果get_price失败，回退到get_best_price（orderbook）
+        if best_ask is None:
+            best_ask = self.trading_client.get_best_price(token_id, side="buy")
+        if best_bid is None:
+            best_bid = self.trading_client.get_best_price(token_id, side="sell")
 
         if best_ask is None or best_bid is None:
             self._orderbook_fail_streak += 1
+            if self._orderbook_fail_streak >= 3:
+                print(f"⚠️  [{side_name}] 连续{self._orderbook_fail_streak}次无法获取价格，可能市场无效")
             return
         else:
             self._orderbook_fail_streak = 0
