@@ -259,6 +259,15 @@ class TradingClient:
             return "simulated_order_id"
         
         try:
+            # 获取fee_rate_bps（手续费率，通常为300，即3%）
+            # 可以从客户端获取或使用默认值
+            fee_rate_bps = 300  # 默认3%手续费（300 basis points）
+            try:
+                if hasattr(self.client, 'get_fee_rate') or hasattr(self.client, 'fee_rate_bps'):
+                    fee_rate_bps = getattr(self.client, 'fee_rate_bps', 300)
+            except:
+                pass
+            
             # 使用ClobClient的新API创建订单
             # 方法1: 尝试使用create_and_post_order（新方法）
             if hasattr(self.client, 'create_and_post_order'):
@@ -270,7 +279,8 @@ class TradingClient:
                         price=str(price),
                         size=str(size),
                         side=order_side,
-                        order_type=order_type
+                        order_type=order_type,
+                        fee_rate_bps=str(fee_rate_bps)  # 添加fee_rate_bps
                     )
                     resp = self.client.create_and_post_order(order_args)
                 else:
@@ -280,7 +290,8 @@ class TradingClient:
                         "price": str(price),
                         "size": str(size),
                         "side": side.upper(),
-                        "order_type": order_type
+                        "order_type": order_type,
+                        "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
                     })
             # 方法2: 尝试使用create_order（旧方法，需要先构建订单）
             elif hasattr(self.client, 'create_order'):
@@ -290,7 +301,8 @@ class TradingClient:
                     "price": str(price),
                     "size": str(size),
                     "side": side.upper(),
-                    "order_type": order_type
+                    "order_type": order_type,
+                    "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
                 }
                 resp = self.client.create_order(order_data)
             # 方法3: 尝试使用post_order
@@ -300,7 +312,8 @@ class TradingClient:
                     "price": str(price),
                     "size": str(size),
                     "side": side.upper(),
-                    "order_type": order_type
+                    "order_type": order_type,
+                    "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
                 }
                 resp = self.client.post_order(order_data)
             else:
