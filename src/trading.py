@@ -259,14 +259,30 @@ class TradingClient:
             return "simulated_order_id"
         
         try:
-            # 获取fee_rate_bps（手续费率，通常为300，即3%）
-            # 可以从客户端获取或使用默认值
-            fee_rate_bps = 300  # 默认3%手续费（300 basis points）
+            # 获取fee_rate_bps（手续费率）
+            # Polymarket的标准费率通常是30-50 bps (0.3%-0.5%)，不是300
+            fee_rate_bps = 30  # 默认0.3%手续费（30 basis points）
+            
+            # 尝试从API获取实际费率
             try:
-                if hasattr(self.client, 'get_fee_rate') or hasattr(self.client, 'fee_rate_bps'):
-                    fee_rate_bps = getattr(self.client, 'fee_rate_bps', 300)
-            except:
+                # 方法1: 尝试调用get_fee_rate方法
+                if hasattr(self.client, 'get_fee_rate'):
+                    fee_info = self.client.get_fee_rate()
+                    if isinstance(fee_info, dict):
+                        fee_rate_bps = fee_info.get('fee_rate_bps', fee_info.get('feeRateBps', 30))
+                    elif isinstance(fee_info, (int, float)):
+                        fee_rate_bps = int(fee_info)
+                # 方法2: 尝试从客户端属性获取
+                elif hasattr(self.client, 'fee_rate_bps'):
+                    fee_rate_bps = int(self.client.fee_rate_bps)
+                elif hasattr(self.client, 'feeRateBps'):
+                    fee_rate_bps = int(self.client.feeRateBps)
+            except Exception as e:
+                # 如果获取失败，使用默认值
                 pass
+            
+            # 确保是整数
+            fee_rate_bps = int(fee_rate_bps)
             
             # 使用ClobClient的新API创建订单
             # 方法1: 尝试使用create_and_post_order（新方法）
@@ -274,37 +290,88 @@ class TradingClient:
                 if HAS_ORDER_TYPES:
                     # 使用OrderArgs类型
                     order_side = BUY if side.upper() == "BUY" else SELL
-                    order_args = OrderArgs(
-                        token_id=token_id,
-                        price=str(price),
-                        size=str(size),
-                        side=order_side,
-                        order_type=order_type,
-                        fee_rate_bps=str(fee_rate_bps)  # 添加fee_rate_bps
-                    )
+                    # 尝试不同的参数格式
+                    try:
+                        order_args = OrderArgs(
+                            token_id=token_id,
+                            price=str(price),
+                            size=str(size),
+                            side=order_side,
+                            order_type=order_type,
+                            fee_rate_bps=fee_rate_bps  # 尝试整数
+                        )
+                    except TypeError:
+                        # 如果整数不行，尝试字符串
+                        try:
+                            order_args = OrderArgs(
+                                token_id=token_id,
+                                price=str(price),
+                                size=str(size),
+                                side=order_side,
+                                order_type=order_type,
+                                fee_rate_bps=str(fee_rate_bps)
+                            )
+                        except TypeError:
+                            # 如果都不行，尝试不带这个参数（某些版本可能不需要）
+                            order_args = OrderArgs(
+                                token_id=token_id,
+                                price=str(price),
+                                size=str(size),
+                                side=order_side,
+                                order_type=order_type
+                            )
                     resp = self.client.create_and_post_order(order_args)
                 else:
-                    # 使用字典方式
-                    resp = self.client.create_and_post_order({
+                    # 使用字典方式，尝试不同的参数格式
+                    order_dict = {
                         "token_id": token_id,
                         "price": str(price),
                         "size": str(size),
                         "side": side.upper(),
-                        "order_type": order_type,
-                        "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
-                    })
+                        "order_type": order_type
+                    }
+                    
+                    # 尝试添加fee_rate_bps（不同可能的格式）
+                    for fee_key in ["fee_rate_bps", "feeRateBps", "fee_rate", "feeRate"]:
+                        try:
+                            order_dict[fee_key] = fee_rate_bps
+                            resp = self.client.create_and_post_order(order_dict)
+                            break
+                        except (TypeError, KeyError) as e:
+                            if "fee" in str(e).lower():
+                                # 如果错误提到fee，尝试下一个格式
+                                if fee_key in order_dict:
+                                    del order_dict[fee_key]
+                                continue
+                            else:
+                                # 其他错误，直接抛出
+                                raise
+                    else:
+                        # 如果所有fee格式都失败，尝试不带fee参数
+                        resp = self.client.create_and_post_order(order_dict)
             # 方法2: 尝试使用create_order（旧方法，需要先构建订单）
             elif hasattr(self.client, 'create_order'):
-                # 构建订单对象
+                # 构建订单对象，尝试不同的fee参数格式
                 order_data = {
                     "token_id": token_id,
                     "price": str(price),
                     "size": str(size),
                     "side": side.upper(),
-                    "order_type": order_type,
-                    "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
+                    "order_type": order_type
                 }
-                resp = self.client.create_order(order_data)
+                
+                # 尝试添加fee_rate_bps
+                for fee_key in ["fee_rate_bps", "feeRateBps"]:
+                    try:
+                        order_data[fee_key] = fee_rate_bps
+                        resp = self.client.create_order(order_data)
+                        break
+                    except (TypeError, KeyError):
+                        if fee_key in order_data:
+                            del order_data[fee_key]
+                else:
+                    # 如果都不行，尝试不带fee
+                    resp = self.client.create_order(order_data)
             # 方法3: 尝试使用post_order
             elif hasattr(self.client, 'post_order'):
                 order_data = {
@@ -312,10 +379,20 @@ class TradingClient:
                     "price": str(price),
                     "size": str(size),
                     "side": side.upper(),
-                    "order_type": order_type,
-                    "fee_rate_bps": str(fee_rate_bps)  # 添加fee_rate_bps
+                    "order_type": order_type
                 }
-                resp = self.client.post_order(order_data)
+                
+                # 尝试添加fee_rate_bps
+                for fee_key in ["fee_rate_bps", "feeRateBps"]:
+                    try:
+                        order_data[fee_key] = fee_rate_bps
+                        resp = self.client.post_order(order_data)
+                        break
+                    except (TypeError, KeyError):
+                        if fee_key in order_data:
+                            del order_data[fee_key]
+                else:
+                    resp = self.client.post_order(order_data)
             else:
                 raise AttributeError("无法找到创建订单的方法")
             
