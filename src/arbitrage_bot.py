@@ -1,213 +1,255 @@
-"""BTC 15分钟套利机器人 - 80买90卖策略"""
+"""BTC 15分钟套利机器人（自动进入下一场 | 盘口价成交 | 每方向每场只买一次）
+策略（按你最新要求）：
+- 买入：Ask >= BUY_PRICE（例如 >=0.80）
+- 卖出：Bid >= SELL_PRICE（例如 >=0.90） 且必须有持仓
+- 成交价：买=best_ask，卖=best_bid（盘口价）
+"""
+
 import time
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Dict, Optional
+
 from src.config import Config
 from src.lookup import find_btc_15min_market, get_market_conditions
 from src.trading import TradingClient
 
+
 class ArbitrageBot:
-    """套利机器人"""
-    
     def __init__(self):
         self.config = Config()
         self.config.validate()
         self.trading_client = TradingClient(self.config)
-        self.market_info = None
-        self.conditions = None
-        self.positions = {}  # 持仓记录 {token_id: {"side": "BUY", "price": 0.80, "size": 5}}
+
+        self.market_info: Optional[Dict] = None
+        self.conditions: Optional[Dict[str, str]] = None
+
+        self.positions: Dict[str, Dict] = {}
+        self._buy_once_guard = set()
+
+        self._last_roll_check_ts = 0
+        self._orderbook_fail_streak = 0
+
         self.stats = {
             "total_buys": 0,
             "total_sells": 0,
             "total_profit": 0.0,
             "total_invested": 0.0
         }
-    
+
     def find_market(self) -> bool:
-        """查找并设置当前市场"""
         print("🔍 正在查找BTC 15分钟市场...")
         market = find_btc_15min_market(self.config.POLYMARKET_HOST)
-        
         if not market:
-            print("❌ 未找到活跃的BTC 15分钟市场")
+            print("❌ 未找到BTC 15分钟市场")
             return False
-        
+
         self.market_info = market
-        print(f"✅ 找到市场: {market['question']}")
-        print(f"   市场ID: {market['market_id']}")
-        
-        # 获取市场条件
-        conditions = get_market_conditions(
-            self.config.POLYMARKET_HOST,
-            market['market_id']
-        )
-        
+        print(f"✅ 找到市场: {market.get('question')}")
+        print(f"   market_id: {market.get('market_id')}")
+        print(f"   slug: {market.get('slug')}")
+        print(f"   is_live: {market.get('is_live')}")
+
+        conditions = get_market_conditions(self.config.POLYMARKET_HOST, market["market_id"])
         if not conditions:
-            print("❌ 无法获取市场条件（UP/DOWN）")
+            print("❌ 无法获取市场条件（UP/DOWN token_id）")
             return False
-        
+
         self.conditions = conditions
-        print(f"✅ UP条件ID: {conditions.get('UP')}")
-        print(f"✅ DOWN条件ID: {conditions.get('DOWN')}")
-        
+        print(f"✅ UP TokenID: {conditions.get('UP')}")
+        print(f"✅ DOWN TokenID: {conditions.get('DOWN')}")
         return True
-    
+
+    def _roll_market_if_needed(self, force: bool = False) -> bool:
+        now = time.time()
+        if not force and (now - self._last_roll_check_ts) < 10:
+            return True
+        self._last_roll_check_ts = now
+
+        latest = find_btc_15min_market(self.config.POLYMARKET_HOST)
+        if not latest:
+            return True
+
+        cur_slug = (self.market_info or {}).get("slug") or ""
+        latest_slug = latest.get("slug") or ""
+
+        if latest_slug and cur_slug and latest_slug != cur_slug:
+            print(f"\n🔁 发现新场次：{cur_slug} -> {latest_slug}，正在切换...")
+            self.market_info = latest
+
+            conditions = get_market_conditions(self.config.POLYMARKET_HOST, latest["market_id"])
+            if not conditions:
+                print("❌ 新场次无法获取 UP/DOWN token_id，稍后重试...")
+                return False
+
+            self.conditions = conditions
+
+            if self.positions:
+                print("🧹 切场：清空上一场持仓记录（避免跨场 token_id 不一致）")
+                self.positions.clear()
+
+            self._orderbook_fail_streak = 0
+
+            print(f"✅ 已切换到新场: {latest.get('question')}")
+            print(f"   market_id: {latest.get('market_id')}")
+            print(f"   slug: {latest_slug}")
+            print(f"✅ UP TokenID: {conditions.get('UP')}")
+            print(f"✅ DOWN TokenID: {conditions.get('DOWN')}")
+            return True
+
+        if self._orderbook_fail_streak >= 8:
+            print("⚠️ orderbook 连续失败，强制重找市场...")
+            self._orderbook_fail_streak = 0
+            return self.find_market()
+
+        return True
+
     def check_balance(self) -> bool:
-        """检查余额"""
         balance = self.trading_client.get_balance()
-        print(f"💰 当前余额: ${balance:.2f} USDC")
-        
-        if balance < self.config.ORDER_SIZE * self.config.BUY_PRICE:
-            print(f"⚠️  余额不足，至少需要 ${self.config.ORDER_SIZE * self.config.BUY_PRICE:.2f} USDC")
-            return False
-        
+        print(f"💰 当前余额: ${balance:.6f} USDC")
         return True
-    
+
+    def _pct(self, price: float) -> float:
+        p = float(price)
+        if p < 0:
+            p = 0.0
+        if p > 1:
+            p = 1.0
+        return p * 100.0
+
     def scan_and_trade(self):
-        """扫描市场并执行交易"""
-        if not self.conditions:
+        if not self.conditions or not self.market_info:
             return
-        
-        # 检查UP和DOWN两个方向
         for side_name, token_id in self.conditions.items():
             self._check_and_trade_token(token_id, side_name)
-    
+
     def _check_and_trade_token(self, token_id: str, side_name: str):
-        """检查单个代币并执行交易"""
-        # 获取当前最佳价格
+        slug = (self.market_info or {}).get("slug") or ""
+        buy_guard_key = (slug, side_name)
+
         best_ask = self.trading_client.get_best_price(token_id, side="buy")
         best_bid = self.trading_client.get_best_price(token_id, side="sell")
-        
-        if not best_ask or not best_bid:
+
+        if best_ask is None or best_bid is None:
+            self._orderbook_fail_streak += 1
             return
-        
-        # 检查是否有持仓
+        else:
+            self._orderbook_fail_streak = 0
+
+        print(
+            f"   🎲 [{side_name}] Ask(买): ${best_ask:.4f} ({self._pct(best_ask):.2f}%) | "
+            f"Bid(卖): ${best_bid:.4f} ({self._pct(best_bid):.2f}%)"
+        )
+
         has_position = token_id in self.positions
-        
-        if not has_position:
-            # 没有持仓，检查是否可以买入（价格 <= BUY_PRICE）
-            if best_ask <= self.config.BUY_PRICE:
-                print(f"\n🎯 [{side_name}] 买入机会！")
-                print(f"   当前价格: ${best_ask:.4f} <= 买入价 ${self.config.BUY_PRICE:.4f}")
-                
+        already_tried_buy = buy_guard_key in self._buy_once_guard
+
+        # ✅ 买入：Ask >= BUY_PRICE（追价）
+        if (not has_position) and (not already_tried_buy):
+            if best_ask >= float(self.config.BUY_PRICE):
+                print(f"\n🎯 [{side_name}] 触发买入：Ask=${best_ask:.4f} >= {self.config.BUY_PRICE:.4f}（盘口价成交）")
+
                 order_id = self.trading_client.place_order(
                     token_id=token_id,
                     side="BUY",
-                    price=self.config.BUY_PRICE,
-                    size=self.config.ORDER_SIZE,
-                    order_type="GTC"
+                    price=float(best_ask),
+                    size=float(self.config.ORDER_SIZE),
+                    order_type="FAK",
                 )
-                
+
+                self._buy_once_guard.add(buy_guard_key)
+
                 if order_id:
-                    # 等待订单确认
-                    time.sleep(1)
-                    order_status = self.trading_client.get_order_status(order_id)
-                    
-                    if order_status and order_status.get("status") == "FILLED":
-                        self.positions[token_id] = {
-                            "side": "BUY",
-                            "price": self.config.BUY_PRICE,
-                            "size": self.config.ORDER_SIZE,
-                            "order_id": order_id,
-                            "side_name": side_name
-                        }
-                        self.stats["total_buys"] += 1
-                        self.stats["total_invested"] += self.config.BUY_PRICE * self.config.ORDER_SIZE
-                        print(f"✅ [{side_name}] 买入成功！持仓: {self.config.ORDER_SIZE} shares @ ${self.config.BUY_PRICE:.4f}")
-        else:
-            # 有持仓，检查是否可以卖出（价格 >= SELL_PRICE）
-            position = self.positions[token_id]
-            
-            if best_bid >= self.config.SELL_PRICE:
-                print(f"\n🎯 [{side_name}] 卖出机会！")
-                print(f"   当前价格: ${best_bid:.4f} >= 卖出价 ${self.config.SELL_PRICE:.4f}")
-                
+                    self.positions[token_id] = {
+                        "side": "BUY",
+                        "price": float(best_ask),
+                        "size": float(self.config.ORDER_SIZE),
+                        "order_id": order_id,
+                        "side_name": side_name,
+                        "slug": slug,
+                    }
+                    self.stats["total_buys"] += 1
+                    self.stats["total_invested"] += float(best_ask) * float(self.config.ORDER_SIZE)
+                    print(f"✅ [{side_name}] 买单已提交: {order_id}")
+                else:
+                    print(f"❌ [{side_name}] 买单提交失败（本场已标记尝试过，不再重复买）")
+
+        # ✅ 卖出：Bid >= SELL_PRICE 且有持仓
+        if has_position:
+            pos = self.positions[token_id]
+            if best_bid >= float(self.config.SELL_PRICE):
+                print(f"\n🎯 [{side_name}] 触发卖出：Bid=${best_bid:.4f} >= {self.config.SELL_PRICE:.4f}（盘口价成交）")
+
                 order_id = self.trading_client.place_order(
                     token_id=token_id,
                     side="SELL",
-                    price=self.config.SELL_PRICE,
-                    size=position["size"],
-                    order_type="GTC"
+                    price=float(best_bid),
+                    size=float(pos["size"]),
+                    order_type="FAK",
                 )
-                
+
                 if order_id:
-                    # 等待订单确认
-                    time.sleep(1)
-                    order_status = self.trading_client.get_order_status(order_id)
-                    
-                    if order_status and order_status.get("status") == "FILLED":
-                        # 计算利润
-                        profit = (self.config.SELL_PRICE - position["price"]) * position["size"]
-                        self.stats["total_profit"] += profit
-                        self.stats["total_sells"] += 1
-                        
-                        print(f"✅ [{side_name}] 卖出成功！")
-                        print(f"   买入价: ${position['price']:.4f}")
-                        print(f"   卖出价: ${self.config.SELL_PRICE:.4f}")
-                        print(f"   利润: ${profit:.4f} ({profit / (position['price'] * position['size']) * 100:.2f}%)")
-                        
-                        # 清除持仓
-                        del self.positions[token_id]
-    
+                    profit = (float(best_bid) - float(pos["price"])) * float(pos["size"])
+                    self.stats["total_profit"] += profit
+                    self.stats["total_sells"] += 1
+                    print(f"✅ [{side_name}] 卖单已提交: {order_id} | 估算利润: ${profit:.4f}")
+                    del self.positions[token_id]
+                else:
+                    print(f"❌ [{side_name}] 卖单提交失败（下一轮继续尝试）")
+
     def print_status(self):
-        """打印当前状态"""
         print(f"\n📊 当前状态:")
         print(f"   买入次数: {self.stats['total_buys']}")
         print(f"   卖出次数: {self.stats['total_sells']}")
-        print(f"   总投入: ${self.stats['total_invested']:.2f}")
-        print(f"   总利润: ${self.stats['total_profit']:.2f}")
+        print(f"   总投入: ${self.stats['total_invested']:.4f}")
+        print(f"   总利润: ${self.stats['total_profit']:.4f}")
         print(f"   当前持仓: {len(self.positions)} 个")
-        
         if self.positions:
-            for token_id, pos in self.positions.items():
-                print(f"     - {pos['side_name']}: {pos['size']} shares @ ${pos['price']:.4f}")
-    
+            for _, pos in self.positions.items():
+                print(f"     - {pos['side_name']}: {pos['size']} @ ${pos['price']:.4f} (slug={pos.get('slug')})")
+
     def run(self):
-        """运行机器人"""
         mode_str = "🔸 模拟模式" if self.config.DRY_RUN else "🔴 实盘模式"
         print(f"\n🚀 BTC 15分钟套利机器人启动")
         print(f"   模式: {mode_str}")
-        print(f"   买入价: ${self.config.BUY_PRICE:.2f}")
-        print(f"   卖出价: ${self.config.SELL_PRICE:.2f}")
+        print(f"   买入价: ${self.config.BUY_PRICE:.2f} ({self.config.BUY_PRICE*100:.0f}%)")
+        print(f"   卖出价: ${self.config.SELL_PRICE:.2f} ({self.config.SELL_PRICE*100:.0f}%)")
         print(f"   订单大小: {self.config.ORDER_SIZE} shares")
         print("=" * 60)
-        
-        # 查找市场
+
         if not self.find_market():
             return
-        
-        # 检查余额
-        if not self.check_balance():
-            return
-        
-        print("\n🔄 开始扫描市场...")
+
+        self.check_balance()
+
+        print("\n🔄 开始扫描市场（自动进入下一场已开启）...")
         print("=" * 60)
-        
+
         scan_count = 0
         try:
             while True:
                 scan_count += 1
                 timestamp = datetime.now().strftime("%H:%M:%S")
                 print(f"\n[扫描 #{scan_count}] {timestamp}")
-                
-                # 扫描并交易
+
+                if not self._roll_market_if_needed():
+                    time.sleep(2)
+                    continue
+
                 self.scan_and_trade()
-                
-                # 每10次扫描打印一次状态
-                if scan_count % 10 == 0:
+
+                if scan_count % 20 == 0:
                     self.print_status()
-                
-                # 短暂延迟，避免请求过快
+
                 time.sleep(1)
-                
+
         except KeyboardInterrupt:
-            print("\n\n⚠️  用户中断")
+            print("\n\n⚠️ 用户中断")
         finally:
             print("\n" + "=" * 60)
             print("🏁 机器人停止")
             self.print_status()
             print("=" * 60)
 
+
 if __name__ == "__main__":
-    bot = ArbitrageBot()
-    bot.run()
+    ArbitrageBot().run()
