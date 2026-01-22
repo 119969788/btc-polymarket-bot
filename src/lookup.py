@@ -205,7 +205,7 @@ def find_btc_15min_market(host: str, forward_steps: int = 12, backward_steps: in
     except Exception as e:
         print(f"⚠️  Gamma API搜索失败: {e}")
     
-    # 方法2: 回退到原来的slug查找逻辑
+    # 方法2: 回退到原来的slug查找逻辑（如果Gamma API失败）
     """
     返回：
     {
